@@ -69,6 +69,8 @@ operator ci::Color() const { return ci::Color(x,y,z); }
 namespace ui = ImGui;
 #endif
 
+#define CINDER_IMGUI_TEXTURE_UNIT 8
+
 //! cinder imgui namespace
 namespace ImGui {
 	
@@ -133,7 +135,7 @@ namespace ImGui {
 		//! Enable anti-aliasing on lines/borders. Disable if you are really tight on CPU/GPU.
 		Options& antiAliasedLines( bool antiAliasing );
 		//! Enable anti-aliasing on filled shapes (rounded rectangles, circles, etc.)
-		Options& antiAliasedShapes( bool antiAliasing );
+		Options& antiAliasedFill( bool antiAliasing );
 		//! Tessellation tolerance. Decrease for highly tessellated curves (higher quality, more polygons), increase to reduce quality.
 		Options& curveTessellationTol( float tessTolerance );
 		
@@ -188,15 +190,12 @@ namespace ImGui {
 	IMGUI_API bool ListBox( const char* label, int* current_item, const std::vector<std::string>& items, int height_in_items = -1);
 	IMGUI_API bool InputText( const char* label, std::string* buf, ImGuiInputTextFlags flags = 0, ImGuiTextEditCallback callback = NULL, void* user_data = NULL);
 	IMGUI_API bool InputTextMultiline( const char* label, std::string* buf, const ImVec2& size = ImVec2(0,0), ImGuiInputTextFlags flags = 0, ImGuiTextEditCallback callback = NULL, void* user_data = NULL);
-	IMGUI_API bool Combo( const char* label, int* current_item, const std::vector<std::string>& items, int height_in_items = -1);
 	
 	// Getters/Setters Helpers
 	template<typename T>
 	bool InputText( const char* label, T *object, std::string( T::*get )() const, void( T::*set )( const std::string& ), ImGuiInputTextFlags flags = 0, ImGuiTextEditCallback callback = NULL, void* user_data = NULL );
 	template<typename T>
 	bool Checkbox(const char* label, T *object, bool( T::*get )() const, void( T::*set )( bool ) );
-	template<typename T>
-	bool Combo( const char* label, T *object, int( T::*get )() const, void( T::*set )( int ), const std::vector<std::string>& items, int height_in_items = -1);
 	template<typename T>
 	bool DragFloat(const char* label, T *object, float( T::*get )() const, void( T::*set )( float ), float v_speed = 1.0f, float v_min = 0.0f, float v_max = 0.0f, const char* display_format = "%.3f", float power = 1.0f);     // If v_min >= v_max we have no bound
 	template<typename T>
@@ -278,33 +277,6 @@ namespace ImGui {
 	IMGUI_API bool FilePicker( const char* label, ci::fs::path* path, bool open = true, const ci::fs::path &initialPath = ci::fs::path(), std::vector<std::string> extensions = std::vector<std::string>() );
 	IMGUI_API bool IconButton( const char* icon, const ImVec2& size = ImVec2(0,0), bool frame = false );
 	IMGUI_API bool IconToggle( const char* iconEnabled, const char* iconDisabled, bool *enabled, const ImVec2& size = ImVec2(0,0), bool frame = false );
-	
-	// Context sharing utilities. Can be used to help sharing the context between host app and dlls.
-	class ContextOwner {
-		ImGuiContext* getImGuiContext() const { return mImguiContext; }
-		void setImGuiContext( ImGuiContext* context = nullptr ) { mImguiContext = context == nullptr ? ImGui::GetCurrentContext() : context; }
-		friend void initializeShared( const Options &options );
-		friend void shareContext();
-		ImGuiContext* mImguiContext = nullptr;
-	};
-
-	inline void initializeShared( const Options &options = Options() )
-	{
-		ImGui::initialize( options );
-		auto contextOwner = dynamic_cast<ContextOwner*>( ci::app::App::get() );
-		CI_ASSERT_MSG( contextOwner, "App has to inherit from ImGui::ContextOwner to use ImGui::initializeShared" );
-		contextOwner->setImGuiContext();
-	}
-
-	inline void shareContext()
-	{
-		auto contextOwner = dynamic_cast<ContextOwner*>( ci::app::App::get() );
-		CI_ASSERT_MSG( contextOwner, "App has to inherit from ImGui::ContextOwner to use ImGui::shareContext" );
-		ImGuiContext* ctx = contextOwner->getImGuiContext();
-		if( ctx != ImGui::GetCurrentContext() ) {
-			ImGui::SetCurrentContext( ctx );
-		}
-	}
 
 	// Dock From LumixEngine
 	// https://github.com/nem0/LumixEngine/blob/master/external/imgui/imgui_dock.h
@@ -334,16 +306,6 @@ namespace ImGui {
 	{
 		bool value = (object->*get)();
 		if( Checkbox( label, &value ) ){
-			(object->*set)( value );
-			return true;
-		}
-		return false;
-	}
-	template<typename T>
-	bool Combo( const char* label, T *object, int( T::*get )() const, void( T::*set )( int ), const std::vector<std::string>& items, int height_in_items )
-	{
-		int value = (object->*get)();
-		if( Combo( label, &value, items, height_in_items ) ){
 			(object->*set)( value );
 			return true;
 		}

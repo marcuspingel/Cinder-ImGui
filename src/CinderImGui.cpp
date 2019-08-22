@@ -61,7 +61,6 @@ ImGui::Options::Options()
 : mWindow( ci::app::getWindow() ),
 mAutoRender( true ), mMergeFonts( true )
 {
-	darkTheme();
 }
 
 ImGui::Options& ImGui::Options::window( const ci::app::WindowRef &window )
@@ -202,9 +201,9 @@ ImGui::Options& ImGui::Options::antiAliasedLines( bool antiAliasing )
 	mStyle.AntiAliasedLines = antiAliasing;
 	return *this;
 }
-ImGui::Options& ImGui::Options::antiAliasedShapes( bool antiAliasing )
+ImGui::Options& ImGui::Options::antiAliasedFill( bool antiAliasing )
 {
-	mStyle.AntiAliasedShapes = antiAliasing;
+	mStyle.AntiAliasedFill = antiAliasing;
 	return *this;
 }
 ImGui::Options& ImGui::Options::curveTessellationTol( float tessTolerance )
@@ -254,7 +253,6 @@ ImGui::Options& ImGui::Options::darkTheme()
 	style.Colors[ImGuiCol_Text]                  = ImVec4(0.86f, 0.93f, 0.89f, 0.78f);
 	style.Colors[ImGuiCol_TextDisabled]          = ImVec4(0.86f, 0.93f, 0.89f, 0.28f);
 	style.Colors[ImGuiCol_WindowBg]              = ImVec4(0.13f, 0.14f, 0.17f, 1.00f);
-	style.Colors[ImGuiCol_ChildWindowBg]		 = ImVec4(0.20f, 0.22f, 0.27f, 0.58f);
 	style.Colors[ImGuiCol_Border]                = ImVec4(0.31f, 0.31f, 1.00f, 0.00f);
 	style.Colors[ImGuiCol_BorderShadow]          = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
 	style.Colors[ImGuiCol_FrameBg]               = ImVec4(0.20f, 0.22f, 0.27f, 1.00f);
@@ -283,9 +281,6 @@ ImGui::Options& ImGui::Options::darkTheme()
 	style.Colors[ImGuiCol_ResizeGrip]            = ImVec4(0.47f, 0.77f, 0.83f, 0.04f);
 	style.Colors[ImGuiCol_ResizeGripHovered]     = ImVec4(0.92f, 0.18f, 0.29f, 0.78f);
 	style.Colors[ImGuiCol_ResizeGripActive]      = ImVec4(0.92f, 0.18f, 0.29f, 1.00f);
-	style.Colors[ImGuiCol_CloseButton]           = ImVec4(0.86f, 0.93f, 0.89f, 0.16f);
-	style.Colors[ImGuiCol_CloseButtonHovered]    = ImVec4(0.86f, 0.93f, 0.89f, 0.39f);
-	style.Colors[ImGuiCol_CloseButtonActive]     = ImVec4(0.86f, 0.93f, 0.89f, 1.00f);
 	style.Colors[ImGuiCol_PlotLines]             = ImVec4(0.86f, 0.93f, 0.89f, 0.63f);
 	style.Colors[ImGuiCol_PlotLinesHovered]      = ImVec4(0.92f, 0.18f, 0.29f, 1.00f);
 	style.Colors[ImGuiCol_PlotHistogram]         = ImVec4(0.86f, 0.93f, 0.89f, 0.63f);
@@ -380,10 +375,9 @@ void Renderer::render( ImDrawData* draw_data )
 	gl::ScopedBlendAlpha scopedBlend;
 	gl::ScopedFaceCulling scopedFaceCulling( false );
 	shader->uniform( "uModelViewProjection", mat );
-	shader->uniform( "uTex", 0 );
 
 	GLuint currentTextureId = 0;
-	ctx->pushTextureBinding( GL_TEXTURE_2D, currentTextureId, 0 );
+	ctx->pushTextureBinding( GL_TEXTURE_2D, CINDER_IMGUI_TEXTURE_UNIT );
 	ctx->pushBoolState( GL_SCISSOR_TEST, GL_TRUE );
 	ctx->pushScissor();
 	for (int n = 0; n < draw_data->CmdListsCount; n++) {
@@ -451,7 +445,7 @@ void Renderer::render( ImDrawData* draw_data )
 				bool pushTexture = currentTextureId != (GLuint)(intptr_t) pcmd->TextureId;
 				if( pushTexture ) {
 					currentTextureId = (GLuint)(intptr_t) pcmd->TextureId;
-					ctx->bindTexture( GL_TEXTURE_2D, currentTextureId, 0 );
+					ctx->bindTexture( GL_TEXTURE_2D, currentTextureId, CINDER_IMGUI_TEXTURE_UNIT );
 				}
 				ctx->setScissor( { ivec2( (int)pcmd->ClipRect.x, (int)(height - pcmd->ClipRect.w) ), ivec2( (int)(pcmd->ClipRect.z - pcmd->ClipRect.x), (int)(pcmd->ClipRect.w - pcmd->ClipRect.y) ) } );
 				gl::drawElements( GL_TRIANGLES, (GLsizei)pcmd->ElemCount, sizeof(ImDrawIdx) == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, idx_buffer_offset );
@@ -462,7 +456,7 @@ void Renderer::render( ImDrawData* draw_data )
 
 	ctx->popScissor();
 	ctx->popBoolState( GL_SCISSOR_TEST );
-	ctx->popTextureBinding( GL_TEXTURE_2D, 0 );
+	ctx->popTextureBinding( GL_TEXTURE_2D, CINDER_IMGUI_TEXTURE_UNIT );
 }
 
 //! initializes and returns the font texture
@@ -722,6 +716,9 @@ void Renderer::initGlslProg()
 		.attribLocation( "iUv", 1 )
 		.attribLocation( "iColor", 2 )
 		);
+
+		mShader->uniform( "uTex", CINDER_IMGUI_TEXTURE_UNIT );
+
 	}
 	catch( gl::GlslProgCompileExc exc ){
 		CI_LOG_E( "Problem Compiling ImGui::Renderer shader " << exc.what() );
@@ -796,26 +793,15 @@ bool InputText( const char* label, std::string* buf, ImGuiInputTextFlags flags, 
 bool InputTextMultiline( const char* label, std::string* buf, const ImVec2& size, ImGuiInputTextFlags flags, ImGuiTextEditCallback callback, void* user_data )
 {
 	// conversion
-	char *buffer = new char[buf->size()+128];
+	constexpr size_t extraSpace = 16384;
+	char *buffer = new char[buf->size()+extraSpace];
 	std::strcpy( buffer, buf->c_str() );
-	bool result = InputTextMultiline( label, buffer, buf->size()+128, size, flags, callback, user_data );
+	bool result = InputTextMultiline( label, buffer, buf->size()+extraSpace, size, flags, callback, user_data );
 	if( result ){
 		*buf = string( buffer );
 	}
 	// cleanup
 	delete [] buffer;
-	return result;
-}
-bool Combo( const char* label, int* current_item, const std::vector<std::string>& items, int height_in_items )
-{
-	// conversion
-	string itemsNames;
-	for( auto item : items )
-		itemsNames += item + '\0';
-	itemsNames += '\0';
-	
-	vector<char> charArray( itemsNames.begin(), itemsNames.end() );
-	bool result = Combo( label, current_item, (const char*) &charArray[0], height_in_items );
 	return result;
 }
 
@@ -897,9 +883,10 @@ namespace {
 			sAccelKeys.push_back( event.getCode() );
 		}
 		
-		io.KeyCtrl = io.KeysDown[KeyEvent::KEY_LCTRL] || io.KeysDown[KeyEvent::KEY_RCTRL] || io.KeysDown[KeyEvent::KEY_LMETA] || io.KeysDown[KeyEvent::KEY_RMETA];
+		io.KeyCtrl = io.KeysDown[KeyEvent::KEY_LCTRL] || io.KeysDown[KeyEvent::KEY_RCTRL];
 		io.KeyShift = io.KeysDown[KeyEvent::KEY_LSHIFT] || io.KeysDown[KeyEvent::KEY_RSHIFT];
 		io.KeyAlt = io.KeysDown[KeyEvent::KEY_LALT] || io.KeysDown[KeyEvent::KEY_RALT];
+		io.KeySuper = io.KeysDown[KeyEvent::KEY_LMETA] || io.KeysDown[KeyEvent::KEY_RMETA] || io.KeysDown[KeyEvent::KEY_LSUPER] || io.KeysDown[KeyEvent::KEY_RSUPER];
 		
 		event.setHandled( io.WantCaptureKeyboard );
 	}
@@ -915,9 +902,10 @@ namespace {
 		}
 		sAccelKeys.clear();
 		
-		io.KeyCtrl = io.KeysDown[KeyEvent::KEY_LCTRL] || io.KeysDown[KeyEvent::KEY_RCTRL] || io.KeysDown[KeyEvent::KEY_LMETA] || io.KeysDown[KeyEvent::KEY_RMETA];
+		io.KeyCtrl = io.KeysDown[KeyEvent::KEY_LCTRL] || io.KeysDown[KeyEvent::KEY_RCTRL];
 		io.KeyShift = io.KeysDown[KeyEvent::KEY_LSHIFT] || io.KeysDown[KeyEvent::KEY_RSHIFT];
 		io.KeyAlt = io.KeysDown[KeyEvent::KEY_LALT] || io.KeysDown[KeyEvent::KEY_RALT];
+		io.KeySuper = io.KeysDown[KeyEvent::KEY_LMETA] || io.KeysDown[KeyEvent::KEY_RMETA] || io.KeysDown[KeyEvent::KEY_LSUPER] || io.KeysDown[KeyEvent::KEY_RSUPER];
 		
 		event.setHandled( io.WantCaptureKeyboard );
 	}
@@ -937,6 +925,8 @@ namespace {
 
 		timer.start();
 		ImGui::Render();
+		auto renderer = getRenderer();
+		renderer->render( ImGui::GetDrawData() );
 		sNewFrame = false;
 		App::get()->dispatchAsync( []() {
 			newFrameGuard();
@@ -979,8 +969,14 @@ namespace {
 // wrong... and would not work in a multi-windows scenario
 static signals::ConnectionList sWindowConnections;
 
+// also wrong... but fixes a crash on cleanup
+static signals::ConnectionList sAppConnections;
+
 void initialize( const Options &options )
 {
+	// create one context for now. will update with multiple context / shared fontatlas soon!
+	ImGuiContext* context = ImGui::CreateContext();
+
 	// get the window and switch to its context before initializing the renderer
 	auto window					= options.getWindow();
 	auto currentContext			= gl::context();
@@ -1011,7 +1007,7 @@ void initialize( const Options &options )
 	imGuiStyle.DisplayWindowPadding		= style.DisplayWindowPadding;
 	imGuiStyle.DisplaySafeAreaPadding	= style.DisplaySafeAreaPadding;
 	imGuiStyle.AntiAliasedLines			= style.AntiAliasedLines;
-	imGuiStyle.AntiAliasedShapes		= style.AntiAliasedShapes;
+	imGuiStyle.AntiAliasedFill			= style.AntiAliasedFill;
 	
 	// set colors
 	for( int i = 0; i < ImGuiCol_COUNT; i++ )
@@ -1038,6 +1034,8 @@ void initialize( const Options &options )
 	io.KeyMap[ImGuiKey_X]               = KeyEvent::KEY_x;
 	io.KeyMap[ImGuiKey_Y]               = KeyEvent::KEY_y;
 	io.KeyMap[ImGuiKey_Z]               = KeyEvent::KEY_z;
+	io.KeyMap[ImGuiKey_Insert]			= KeyEvent::KEY_INSERT;
+	io.KeyMap[ImGuiKey_Space]			= KeyEvent::KEY_SPACE;
 	
 	// setup config file path
 	static string path = ( getAssetPath( "" ) / "imgui.ini" ).string();
@@ -1058,12 +1056,8 @@ void initialize( const Options &options )
 #ifndef CINDER_LINUX
 	// clipboard callbacks
 	io.SetClipboardTextFn = []( void* user_data, const char* text ) {
-		const char* text_end = text + strlen(text);
-		char* buf = (char*)malloc(text_end - text + 1);
-		memcpy(buf, text, text_end-text);
-		buf[text_end-text] = '\0';
-		Clipboard::setString( buf );
-		free(buf);
+		// clipboard text is already zero-terminated
+		Clipboard::setString( text );
 	};
 	io.GetClipboardTextFn = []( void* user_data ) {
 		string str = Clipboard::getString();
@@ -1074,33 +1068,27 @@ void initialize( const Options &options )
 	};
 #endif
 	
-	// renderer callback
-	io.RenderDrawListsFn = []( ImDrawData* data ) {
-		auto renderer = getRenderer();
-		renderer->render( data );
-	};
-	
 	// connect window's signals
 	disconnectWindow( window );
 	connectWindow( window );
 	
 	if( options.isAutoRenderEnabled() && window ) {
-		//console() << "NewFrame**" << endl;
-		//ImGui::NewFrame();
-		App::get()->getSignalUpdate().connect( newFrameGuard );
-		//sWindowConnections += ( window->getSignalDraw().connect( newFrameGuard ) );
+		sWindowConnections += ( window->getSignalDraw().connect( newFrameGuard ) );
 		sWindowConnections += ( window->getSignalPostDraw().connect( render ) );
 	}
 	
 	// connect app's signals
-	app::App::get()->getSignalDidBecomeActive().connect( resetKeys );
-	app::App::get()->getSignalWillResignActive().connect( resetKeys );
+    sAppConnections += app::App::get()->getSignalDidBecomeActive().connect( resetKeys );
+    sAppConnections += app::App::get()->getSignalWillResignActive().connect( resetKeys );
+    sAppConnections += app::App::get()->getSignalCleanup().connect( [context](){
+        sAppConnections.clear();
+
+		ImGui::DestroyContext( context );
 #if defined( IMGUI_DOCK )
-	app::App::get()->getSignalCleanup().connect( [](){
 		ShutdownDock();
-	} );
 #endif
-	
+	} );
+
 	sInitialized = true;
 	
 	// switch back to the original gl context
